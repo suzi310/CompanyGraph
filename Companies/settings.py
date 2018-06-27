@@ -16,7 +16,7 @@ NEWSPIDER_MODULE = 'Companies.spiders'
 FEED_EXPORT_ENCONDING = 'utf-8'
 
 MONGO_URI = 'localhost'
-MONGO_DB = 'Companies6'
+MONGO_DB = 'Companies8'
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
 #USER_AGENT = 'Companies (+http://www.yourdomain.com)'

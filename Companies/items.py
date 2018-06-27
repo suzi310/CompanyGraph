@@ -55,7 +55,7 @@ class CompanyItem(scrapy.Item):
     shareholders = scrapy.Field()
     executive = scrapy.Field()
 
-class ExecutiveInfoItem(scrapy.Item):
+class ExecutiveItem(scrapy.Item):
     # executive_info = scrapy.Field()
     _key = scrapy.Field()
     name = scrapy.Field()

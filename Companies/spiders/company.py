@@ -11,13 +11,13 @@ import re
 from ..items import *
 import math
 import time
-
+from pymongo import MongoClient
 
 class CompanySpider(scrapy.Spider):
     name = 'company'
     domains = ['www.qixin.com/']
     start_urls = ['https://www.qixin.com/company/9eda1ceb-4d50-4b02-9ef0-ad1437d24f75']
-    max_depth = 3
+    max_depth = 2
 
 
     def parse(self, response):
@@ -60,7 +60,7 @@ class CompanySpider(scrapy.Spider):
             num = 0
             executive_key_list = []
             for employee in employees:
-                executive_item = ExecutiveInfoItem()
+                executive_item = ExecutiveItem()
                 executive_key = company_key + '_e' + str(num)
                 executive_item['_key'] = executive_key
                 executive_item['post'] = employee.xpath('../preceding-sibling::td[1]/text()').extract_first()
@@ -94,84 +94,70 @@ class CompanySpider(scrapy.Spider):
         # 第一页
         list = response.css('.app-investment-list .investment-item')
         for li in list:
-            # investment_item = InvestmentsItem()
             investment_key = company_key + '_i' + str(num)
-            # investment_item['_key'] = investment_key
-            # investment_item['company_name'] = li.css('.col-2 h5 a::text').extract_first()
-            # investment_item['href'] = li.css('.col-2 h5 a::attr(href)').extract_first()
+            href = li.css('.col-2 h5 a::attr(href)').extract_first()
+            investment_item = InvestmentsItem()
+            investment_item['_key'] = investment_key
+            investment_item['company_name'] = li.css('.col-2 h5 a::text').extract_first()
+            investment_item['href'] = href
             num = num + 1
             investments_key_list.append(investment_key)
-            ############
-            href = li.css('.col-2 h5 a::attr(href)').extract_first()
-            ############
-            # 爬取下一级公司
-            if response.meta['depth'] <= self.max_depth:
-                yield scrapy.Request(response.urljoin(href),
-                                     meta={'depth':response.meta['depth']+1, 'company_key':investment_key}, callback=self.parse)
-            ###################
-            else:
-                company_item = CompanyItem()
-                company_item['_key'] = investment_key
-                company_item['company_name'] = li.css('.col-2 h5 a::text').extract_first()
-                yield company_item
-            #################
-            # yield investment_item
+            yield investment_item
         if total_page > 1:
             # 其他页
             option = Options()
-            option.add_argument('--headless')
+            # option.add_argument('--headless')
             browser = webdriver.Chrome(options=option)
             browser.get(response.url)
             wait = WebDriverWait(browser, 10)
             # 登录
-            try:
-                if re.search('login', browser.current_url):
-                    username = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'input-flat-user')))
-                    password = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'input-flat-lock')))
-                    submit = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-block')))
-                    username.send_keys('13631433117')
-                    password.send_keys('123456')
-                    submit.click()
-                    time.sleep(1)
-            except TimeoutException:
-                print("Timeout!")
+            if re.search('login', browser.current_url):
+                login(wait)
             # 翻页
             for i in range(1, total_page):
-                pagination = wait.until(
+                if len(browser.find_elements_by_class_name('modal-backdrop')) == 1:
+                    login(wait)
+                try:
+                    pagination = wait.until(
                     EC.presence_of_element_located((By.CLASS_NAME, 'pagination')))
-                browser.execute_script("arguments[0].scrollIntoView(false);", pagination)
-                next = wait.until(EC.presence_of_element_located(
-                    (By.XPATH, '//ul[@class="pagination"]//li[@class="active"]/following-sibling::li[1]/a')))
-                next.click()
-                time.sleep(1)
+                    browser.execute_script("arguments[0].scrollIntoView(false);", pagination)
+                    next = wait.until(EC.presence_of_element_located(
+                        (By.XPATH, '//ul[@class="pagination"]//li[@class="active"]/following-sibling::li[1]/a')))
+                    next.click()
+                    time.sleep(1)
+                except TimeoutException:
+                    print("Timeout!")
                 doc = pq(browser.page_source)
                 items = doc('.app-investment-list .investment-item').items()
                 for li in items:
-                    # investment_item = InvestmentsItem()
                     investment_key = company_key + '_i' + str(num)
-                    # investment_item['_key'] = investment_key
-                    # investment_item['company_name'] = li.find('.h5').text()
-                    # investment_item['href'] = li.find('.h5').children().attr('href')
-                    num = num + 1
                     href = li.find('.h5').children().attr('href')
+                    investment_item = InvestmentsItem()
+                    investment_item['_key'] = investment_key
+                    investment_item['company_name'] = li.find('.h5').text()
+                    investment_item['href'] = href
+                    num = num + 1
                     investments_key_list.append(investment_key)
-                    # 爬取下一级公司
-                    if response.meta['depth'] <= self.max_depth:
-                        yield scrapy.Request(response.urljoin(href),
-                                             meta={'depth': response.meta['depth'] + 1, 'company_key': investment_key},
-                                             callback=self.parse)
-                    ###################
-                    else:
-                        company_item = CompanyItem()
-                        company_item['_key'] = investment_key
-                        company_item['company_name'] = li.find('.h5').text()
-                        yield company_item
-                    #################
-                    # yield investment_item
+                    yield investment_item
         c_i_item = CompanyInvestmentsItem()
         c_i_item['company_key'] = company_key
         c_i_item['investments_key'] = investments_key_list
         yield c_i_item
+        # 爬取下一级公司
+        ## 数据库操作
+        client = MongoClient(self.settings.MONGO_URI)
+        db = client[self.settings.MONGO_DB]
+        for i in db['InvestmentsItem'].find({"_key": eval("/" + company_key)}):
+            if response.meta['depth'] <= self.max_depth:
+                yield scrapy.Request(response.urljoin(i['href']),
+                                     meta={'depth': response.meta['depth'] + 1}, callback=self.parse)
+            else:
+                ###################
+                company_item = CompanyItem()
+                company_item['_key'] = i['_key']
+                company_item['company_name'] = i['company_name']
+                yield company_item
+                ################
 
     # 爬取上市信息
     def parse_list_info(self, response):
@@ -215,7 +201,7 @@ class CompanySpider(scrapy.Spider):
         executive_key_list = []
         id = 0
         for name in names:
-            executive_info_item = ExecutiveInfoItem()
+            executive_info_item = ExecutiveItem()
             executive_key = company_key + '_e' + str(id)
             executive_info_item['_key'] = executive_key
             executive_info_item['name'] = name.xpath('./following-sibling::td/a[1]/text()').extract_first()
@@ -249,3 +235,15 @@ class CompanySpider(scrapy.Spider):
         yield company_item
 
 
+def login(wait):
+    try:
+        username = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'input-flat-user')))
+        password = wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'input-flat-lock')))
+        submit = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-block')))
+        username.send_keys('13631433117')
+        password.send_keys('123456')
+        submit.click()
+        time.sleep(1)
+        # print('login function is called!')
+    except TimeoutError:
+        print('Timeout!')
